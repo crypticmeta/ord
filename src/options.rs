@@ -610,6 +610,7 @@ mod tests {
         .load_config()
         .unwrap(),
       Config {
+        api_key: None,
         hidden: iter::once(id).collect(),
         ..Default::default()
       }
@@ -666,6 +667,7 @@ mod tests {
       .load_config()
       .unwrap(),
       Config {
+        api_key: None,
         hidden: iter::once(id).collect(),
         ..Default::default()
       }
