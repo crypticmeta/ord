@@ -147,6 +147,7 @@ impl Server {
       let router = Router::new()
         .route("/", get(Self::home))
         //  .route("/api", get(Self::api))
+          .route("/address/:address", get(Self::address))
         .route("/block-count", get(Self::block_count))
         .route("/block/:query", get(Self::block))
         .route("/bounties", get(Self::bounties))
@@ -155,6 +156,7 @@ impl Server {
         .route("/faq", get(Self::faq))
         .route("/favicon.ico", get(Self::favicon))
         .route("/feed.xml", get(Self::feed))
+        .route("/feed", get(Self::feed))
         .route("/input/:block/:transaction/:input", get(Self::input))
         .route("/inscription/:inscription_id", get(Self::inscription))
         .route("/inscriptions", get(Self::inscriptions))
@@ -1009,6 +1011,9 @@ impl Server {
       .get_inscription_satpoint_by_id(inscription_id)?
       .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
 
+
+  let sat = entry.sat.ok_or_else(|| anyhow::anyhow!("No sat associated with this inscription"))?;
+
     let output = if satpoint.outpoint == unbound_outpoint() {
       None
     } else {
@@ -1056,6 +1061,16 @@ impl Server {
         "content_length": inscription.content_length(),
         "content_type": inscription.content_type(),
         "sat": entry.sat,
+        "sat_name": sat.name(),
+        "decimal": sat.decimal().to_string(),
+        "degree": sat.degree().to_string(),
+        "percentile": sat.percentile(),
+        "cycle": sat.cycle(),
+        "epoch": sat.epoch(),
+        "period": sat.period(),
+        "block": sat.height(),
+        "sat_offset": sat.third(),
+        "rarity": sat.rarity(),
         "location": satpoint,
         "output": satpoint.outpoint,
         "offset": satpoint.offset,
