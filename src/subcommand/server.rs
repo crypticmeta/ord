@@ -1328,6 +1328,7 @@ impl Server {
     Path(inscription_id): Path<InscriptionId>,
     accept_json: AcceptJson,
   ) -> ServerResult<Response> {
+   
     let entry = index
       .get_inscription_entry(inscription_id)?
       .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
@@ -1339,6 +1340,13 @@ impl Server {
     let satpoint = index
       .get_inscription_satpoint_by_id(inscription_id)?
       .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
+
+       let list = if index.has_sat_index()? {
+      index.list(satpoint.outpoint)?
+    } else {
+      None
+    };
+
 
 
   let sat = entry.sat.ok_or_else(|| anyhow::anyhow!("No sat associated with this inscription"))?;
@@ -1356,6 +1364,32 @@ impl Server {
           .ok_or_not_found(|| format!("inscription {inscription_id} current transaction output"))?,
       )
     };
+
+    let output2 = if satpoint.outpoint == OutPoint::null() {
+      let mut value = 0;
+
+      if let Some(List::Unspent(ranges)) = &list {
+        for (start, end) in ranges {
+          value += end - start;
+        }
+      }
+
+      TxOut {
+        value,
+        script_pubkey: Script::new(),
+      }
+    } else {
+      index
+        .get_transaction(satpoint.outpoint.txid)?
+        .ok_or_not_found(|| format!("output {}", satpoint.outpoint))?
+
+        .output
+        .into_iter()
+        .nth(satpoint.outpoint.vout as usize)
+        .ok_or_not_found(|| format!("output {}", satpoint.outpoint))?
+
+    };
+
 
     let genesis_output = index
       .get_transaction(inscription_id.txid)?
@@ -1385,6 +1419,7 @@ impl Server {
         "address": output.is_some().then(|| {
           page_config.chain.address_from_script(&output.unwrap().script_pubkey).unwrap()
         }),
+        "output_value": output2.value,
         "number": entry.number,
         "content_length": inscription.content_length(),
         "content_type": inscription.content_type(),
