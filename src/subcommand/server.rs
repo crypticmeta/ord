@@ -1,5 +1,7 @@
+mod accept_json;
 use {
   self::{
+     accept_json::AcceptJson,
     deserialize_from_str::DeserializeFromStr,
     error::{OptionExt, ServerError, ServerResult},
   },
@@ -12,7 +14,7 @@ use {
   },
   axum::{
     body,
-    extract::{Extension, Path, Query},
+     extract::{Extension, Json, Path, Query},
     headers::UserAgent,
     http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Redirect, Response},
@@ -156,6 +158,7 @@ impl Server {
         .route("/faq", get(Self::faq))
         .route("/favicon.ico", get(Self::favicon))
         .route("/feed.xml", get(Self::feed))
+        .route("/feed", get(Self::feed))
         .route("/input/:block/:transaction/:input", get(Self::input))
         .route("/inscription/:inscription_id", get(Self::inscription))
         .route("/inscriptions", get(Self::inscriptions))
@@ -378,36 +381,126 @@ impl Server {
     Extension(page_config): Extension<Arc<PageConfig>>,
     Extension(index): Extension<Arc<Index>>,
     Path(DeserializeFromStr(sat)): Path<DeserializeFromStr<Sat>>,
-  ) -> ServerResult<PageHtml<SatHtml>> {
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
     let satpoint = index.rare_sat_satpoint(sat)?;
 
-    Ok(
+       Ok(if accept_json.0 {
+      axum::Json(serde_json::json!({
+        "decimal": sat.decimal().to_string(),
+        "degree": sat.degree().to_string(),
+        "percentile": sat.percentile(),
+        "name": sat.name(),
+        "cycle": sat.cycle(),
+        "epoch": sat.epoch(),
+        "period": sat.period(),
+        "block": sat.height(),
+        "offset": sat.third(),
+        "rarity": sat.rarity(),
+        "timestamp": index.blocktime(sat.height())?.timestamp().to_string(),
+        "_links": {
+          "self": {
+            "href": format!("/sat/{}", sat),
+          },
+          "block": {
+            "href": format!("/block/{}", sat.height()),
+          },
+          "inscription": (index.get_inscription_id_by_sat(sat)?.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscription/{:?}", index.get_inscription_id_by_sat(sat)),
+            })
+          }),
+          "next": (sat < Sat::LAST.0).then(|| {
+            serde_json::json!({
+              "href": format!("/sat/{}", sat.0 + 1),
+            })
+          }),
+          "prev": (sat > 0).then(|| {
+            serde_json::json!({
+              "href": format!("/sat/{}", sat.0 - 1),
+            })
+          }),
+        }
+      }))
+      .into_response()
+    } else {
       SatHtml {
         sat,
         satpoint,
         blocktime: index.block_time(sat.height())?,
         inscription: index.get_inscription_id_by_sat(sat)?,
       }
-      .page(page_config, index.has_sat_index()?),
-    )
+      .page(page_config, index.has_sat_index()?)
+      .into_response()
+    })
   }
+
+   async fn api_sat(
+    Extension(page_config): Extension<Arc<PageConfig>>,
+    Extension(index): Extension<Arc<Index>>,
+    Path(DeserializeFromStr(sat)): Path<DeserializeFromStr<Sat>>,
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
+    let satpoint = index.rare_sat_satpoint(sat)?;
+
+       Ok(
+      axum::Json(serde_json::json!({
+        "decimal": sat.decimal().to_string(),
+        "degree": sat.degree().to_string(),
+        "percentile": sat.percentile(),
+        "name": sat.name(),
+        "cycle": sat.cycle(),
+        "epoch": sat.epoch(),
+        "period": sat.period(),
+        "block": sat.height(),
+        "offset": sat.third(),
+        "rarity": sat.rarity(),
+        "timestamp": index.blocktime(sat.height())?.timestamp().to_string(),
+        "_links": {
+          "self": {
+            "href": format!("/sat/{}", sat),
+          },
+          "block": {
+            "href": format!("/block/{}", sat.height()),
+          },
+          "inscription": (index.get_inscription_id_by_sat(sat)?.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscription/{:?}", index.get_inscription_id_by_sat(sat)),
+            })
+          }),
+          "next": (sat < Sat::LAST.0).then(|| {
+            serde_json::json!({
+              "href": format!("/sat/{}", sat.0 + 1),
+            })
+          }),
+          "prev": (sat > 0).then(|| {
+            serde_json::json!({
+              "href": format!("/sat/{}", sat.0 - 1),
+            })
+          }),
+        }
+      }))
+      .into_response())
+    } 
+  
 
   async fn ordinal(Path(sat): Path<String>) -> Redirect {
     Redirect::to(&format!("/sat/{sat}"))
   }
 
-  async fn output(
+ async fn output(
     Extension(page_config): Extension<Arc<PageConfig>>,
     Extension(index): Extension<Arc<Index>>,
     Path(outpoint): Path<OutPoint>,
-  ) -> ServerResult<PageHtml<OutputHtml>> {
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
     let list = if index.has_sat_index()? {
       index.list(outpoint)?
     } else {
       None
     };
 
-    let output = if outpoint == OutPoint::null() || outpoint == unbound_outpoint() {
+    let output = if outpoint == OutPoint::null() {
       let mut value = 0;
 
       if let Some(List::Unspent(ranges)) = &list {
@@ -432,7 +525,28 @@ impl Server {
 
     let inscriptions = index.get_inscriptions_on_output(outpoint)?;
 
-    Ok(
+    Ok(if accept_json.0 {
+      axum::Json(serde_json::json!({
+        "value": output.value,
+        "script_pubkey": output.script_pubkey.asm(),
+        "address": page_config.chain.address_from_script(&output.script_pubkey).unwrap(),
+        "transaction": outpoint.txid,
+        "inscriptions": inscriptions.iter().map(|inscription| {
+          serde_json::json!({
+            "href": format!("/inscription/{}", inscription),
+          })
+        }).collect::<Vec<_>>(),
+        "_links": {
+          "self": {
+            "href": format!("/output/{}", outpoint),
+          },
+          "transaction": {
+            "href": format!("/tx/{}", outpoint.txid),
+          },
+        }
+      }))
+      .into_response()
+    } else {
       OutputHtml {
         outpoint,
         inscriptions,
@@ -440,9 +554,70 @@ impl Server {
         chain: page_config.chain,
         output,
       }
-      .page(page_config, index.has_sat_index()?),
-    )
+      .page(page_config, index.has_sat_index()?)
+      .into_response()
+    })
   }
+
+   async fn api_output(
+    Extension(page_config): Extension<Arc<PageConfig>>,
+    Extension(index): Extension<Arc<Index>>,
+    Path(outpoint): Path<OutPoint>,
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
+    let list = if index.has_sat_index()? {
+      index.list(outpoint)?
+    } else {
+      None
+    };
+
+    let output = if outpoint == OutPoint::null() {
+      let mut value = 0;
+
+      if let Some(List::Unspent(ranges)) = &list {
+        for (start, end) in ranges {
+          value += end - start;
+        }
+      }
+
+      TxOut {
+        value,
+        script_pubkey: Script::new(),
+      }
+    } else {
+      index
+        .get_transaction(outpoint.txid)?
+        .ok_or_not_found(|| format!("output {outpoint}"))?
+        .output
+        .into_iter()
+        .nth(outpoint.vout as usize)
+        .ok_or_not_found(|| format!("output {outpoint}"))?
+    };
+
+    let inscriptions = index.get_inscriptions_on_output(outpoint)?;
+
+    Ok(  axum::Json(serde_json::json!({
+        "value": output.value,
+        "script_pubkey": output.script_pubkey.asm(),
+        "address": page_config.chain.address_from_script(&output.script_pubkey).unwrap(),
+        "transaction": outpoint.txid,
+        "inscriptions": inscriptions.iter().map(|inscription| {
+          serde_json::json!({
+            "href": format!("/inscription/{}", inscription),
+          })
+        }).collect::<Vec<_>>(),
+        "_links": {
+          "self": {
+            "href": format!("/output/{}", outpoint),
+          },
+          "transaction": {
+            "href": format!("/tx/{}", outpoint.txid),
+          },
+        }
+      }))
+      .into_response())
+  }
+
 
   async fn range(
     Extension(page_config): Extension<Arc<PageConfig>>,
@@ -487,7 +662,8 @@ impl Server {
     Extension(page_config): Extension<Arc<PageConfig>>,
     Extension(index): Extension<Arc<Index>>,
     Path(DeserializeFromStr(query)): Path<DeserializeFromStr<BlockQuery>>,
-  ) -> ServerResult<PageHtml<BlockHtml>> {
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
     let (block, height) = match query {
       BlockQuery::Height(height) => {
         let block = index
@@ -509,33 +685,177 @@ impl Server {
       }
     };
 
-    Ok(
+    Ok(if accept_json.0 {
+      axum::Json(serde_json::json!({
+        "hash": block.header.block_hash(),
+        "target": block.header.target(),
+        "size": block.size(),
+        "weight": block.weight(),
+        "timestamp": timestamp(block.header.time).to_string(),
+        "height": height,
+        "previous_blockhash": block.header.prev_blockhash,
+        "_links": {
+          "self": {
+            "href": format!("/block/{}", block.header.block_hash()),
+          },
+          "prev": {
+            "href": format!("/block/{}", block.header.prev_blockhash),
+          },
+        }
+      }))
+      .into_response()
+    } else {
       BlockHtml::new(block, Height(height), Self::index_height(&index)?)
-        .page(page_config, index.has_sat_index()?),
-    )
+        .page(page_config, index.has_sat_index()?)
+        .into_response()
+    })
   }
 
+#[allow(clippy::cast_possible_truncation)]
   async fn transaction(
     Extension(page_config): Extension<Arc<PageConfig>>,
     Extension(index): Extension<Arc<Index>>,
     Path(txid): Path<Txid>,
-  ) -> ServerResult<PageHtml<TransactionHtml>> {
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
     let inscription = index.get_inscription_by_id(txid.into())?;
 
-    let blockhash = index.get_transaction_blockhash(txid)?;
+    let transaction = index
+      .get_transaction(txid)?
+      .ok_or_not_found(|| format!("transaction {txid}"))?;
 
-    Ok(
+    let info = index.get_raw_transaction(txid)?.unwrap();
+
+    let blockhash = info.blockhash;
+
+    let blocktime = info.blocktime.unwrap_or_default() as u32;
+
+    let confirmations = info.confirmations.unwrap_or_default();
+
+    Ok(if accept_json.0 {
+      axum::Json(serde_json::json!({
+        "transaction": txid,
+        "timestamp": timestamp(blocktime).to_string(),
+        "confirmations": confirmations,
+        "_links": {
+          "self": {
+            "href": format!("/tx/{}", txid),
+          },
+          "block": (blockhash.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/block/{}", blockhash.unwrap()),
+            })
+          }),
+          "inscription": (inscription.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscription/{}", InscriptionId::from(txid)),
+            })
+          }),
+          "inputs": transaction.input.iter().map(|input| {
+              serde_json::json!({
+                "href": format!("/output/{}", input.previous_output),
+              })
+            }).collect::<Vec<_>>(),
+          "outputs": (0u32..).zip(transaction.output.iter()).map(|(vout, _output)| {
+            serde_json::json!({
+              "href": format!("/output/{}", OutPoint::new(txid, vout)),
+            })
+          }).collect::<Vec<_>>(),
+        }
+      }))
+      .into_response()
+    } else {
       TransactionHtml::new(
-        index
-          .get_transaction(txid)?
-          .ok_or_not_found(|| format!("transaction {txid}"))?,
+        transaction,
         blockhash,
         inscription.map(|_| txid.into()),
         page_config.chain,
       )
-      .page(page_config, index.has_sat_index()?),
+      .page(page_config, index.has_sat_index()?)
+      .into_response()
+    })
+  }
+
+  #[allow(clippy::cast_possible_truncation)]
+  async fn api_transaction(
+    Extension(page_config): Extension<Arc<PageConfig>>,
+    Extension(index): Extension<Arc<Index>>,
+    Path(txid): Path<Txid>,
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
+    let inscription = index.get_inscription_by_id(txid.into())?;
+
+    let transaction = index
+      .get_transaction(txid)?
+      .ok_or_not_found(|| format!("transaction {txid}"))?;
+
+    let info = index.get_raw_transaction(txid)?.unwrap();
+
+    let blockhash = info.blockhash;
+
+    let blocktime = info.blocktime.unwrap_or_default() as u32;
+
+    let confirmations = info.confirmations.unwrap_or_default();
+
+    Ok(axum::Json(serde_json::json!({
+        "transaction": txid,
+        "timestamp": timestamp(blocktime).to_string(),
+        "confirmations": confirmations,
+        "_links": {
+          "self": {
+            "href": format!("/tx/{}", txid),
+          },
+          "block": (blockhash.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/block/{}", blockhash.unwrap()),
+            })
+          }),
+          "inscription": (inscription.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscription/{}", InscriptionId::from(txid)),
+            })
+          }),
+          "inputs": transaction.input.iter().map(|input| {
+              serde_json::json!({
+                "href": format!("/output/{}", input.previous_output),
+              })
+            }).collect::<Vec<_>>(),
+          "outputs": (0u32..).zip(transaction.output.iter()).map(|(vout, _output)| {
+            serde_json::json!({
+              "href": format!("/output/{}", OutPoint::new(txid, vout)),
+            })
+          }).collect::<Vec<_>>(),
+        }
+      }))
+      .into_response())
+  }
+
+   async fn address(
+    Extension(index): Extension<Arc<Index>>,
+    Path(DeserializeFromStr(address)): Path<DeserializeFromStr<Address>>,
+  ) -> ServerResult<Response> {
+    let inscription_ids = index
+      .get_inscriptions_by_address(&address)?
+      .ok_or_not_found(|| format!("Address {address}"))?;
+
+    Ok(
+      axum::Json(serde_json::json!({
+        "address": address,
+        "_links": {
+          "self": {
+            "href": format!("/address/{}", address),
+          },
+        },
+        "inscriptions": inscription_ids.iter().map(|inscription_id| {
+          serde_json::json!({
+            "href": format!("/inscription/{}", inscription_id),
+          })
+        }).collect::<Vec<_>>(),
+      }))
+      .into_response(),
     )
   }
+
 
   async fn status(Extension(index): Extension<Arc<Index>>) -> (StatusCode, &'static str) {
     if index.is_reorged() {
@@ -621,34 +941,54 @@ impl Server {
     }
   }
 
-  async fn feed(
+ async fn feed(
     Extension(page_config): Extension<Arc<PageConfig>>,
     Extension(index): Extension<Arc<Index>>,
+    accept_json: AcceptJson,
   ) -> ServerResult<Response> {
-    let mut builder = rss::ChannelBuilder::default();
+    let inscriptions = index.get_feed_inscriptions(300)?;
 
-    let chain = page_config.chain;
-    match chain {
-      Chain::Mainnet => builder.title("Inscriptions"),
-      _ => builder.title(format!("Inscriptions – {chain:?}")),
-    };
+    Ok(if accept_json.0 {
+      axum::Json(serde_json::json!({
+        "total": inscriptions.first().unwrap().0,
+        "count": inscriptions.len(),
+        "_links": {
+          "self": {
+            "href": "/feed",
+          },
+          "inscriptions": inscriptions.iter().map(|(number, id)| {
+            serde_json::json!({
+              "href": format!("/inscription/{}", id),
+              "title": format!("Inscription {}", number),
+            })
+          }).collect::<Vec<_>>(),
+        }
+      }))
+      .into_response()
+    } else {
+      let mut builder = rss::ChannelBuilder::default();
 
-    builder.generator(Some("ord".to_string()));
+      let chain = page_config.chain;
+      match chain {
+        Chain::Mainnet => builder.title("Inscriptions"),
+        _ => builder.title(format!("Inscriptions – {chain:?}")),
+      };
 
-    for (number, id) in index.get_feed_inscriptions(300)? {
-      builder.item(
-        rss::ItemBuilder::default()
-          .title(format!("Inscription {number}"))
-          .link(format!("/inscription/{id}"))
-          .guid(Some(rss::Guid {
-            value: format!("/inscription/{id}"),
-            permalink: true,
-          }))
-          .build(),
-      );
-    }
+      builder.generator(Some("ord".to_string()));
 
-    Ok(
+      for (number, id) in inscriptions {
+        builder.item(
+          rss::ItemBuilder::default()
+            .title(format!("Inscription {number}"))
+            .link(format!("/inscription/{id}"))
+            .guid(Some(rss::Guid {
+              value: format!("/inscription/{id}"),
+              permalink: true,
+            }))
+            .build(),
+        );
+      }
+
       (
         [
           (header::CONTENT_TYPE, "application/rss+xml"),
@@ -659,8 +999,33 @@ impl Server {
         ],
         builder.build().to_string(),
       )
-        .into_response(),
-    )
+        .into_response()
+    })
+  }
+
+  async fn api_feed(
+    Extension(page_config): Extension<Arc<PageConfig>>,
+    Extension(index): Extension<Arc<Index>>,
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
+    let inscriptions = index.get_feed_inscriptions(300)?;
+
+    Ok( axum::Json(serde_json::json!({
+        "total": inscriptions.first().unwrap().0,
+        "count": inscriptions.len(),
+        "_links": {
+          "self": {
+            "href": "/feed",
+          },
+          "inscriptions": inscriptions.iter().map(|(number, id)| {
+            serde_json::json!({
+              "href": format!("/inscription/{}", id),
+              "title": format!("Inscription {}", number),
+            })
+          }).collect::<Vec<_>>(),
+        }
+      }))
+      .into_response())
   }
 
   async fn static_asset(Path(path): Path<String>) -> ServerResult<Response> {
@@ -795,6 +1160,7 @@ impl Server {
     headers.append(
       header::CONTENT_SECURITY_POLICY,
       HeaderValue::from_static("default-src *:*/content/ *:*/blockheight *:*/blockhash *:*/blockhash/ *:*/blocktime 'unsafe-eval' 'unsafe-inline' data: blob:"),
+
     );
 
     let body = inscription.into_body();
@@ -871,7 +1237,8 @@ impl Server {
     Extension(page_config): Extension<Arc<PageConfig>>,
     Extension(index): Extension<Arc<Index>>,
     Path(inscription_id): Path<InscriptionId>,
-  ) -> ServerResult<PageHtml<InscriptionHtml>> {
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
     let entry = index
       .get_inscription_entry(inscription_id)?
       .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
@@ -883,6 +1250,9 @@ impl Server {
     let satpoint = index
       .get_inscription_satpoint_by_id(inscription_id)?
       .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
+
+
+  let sat = entry.sat.ok_or_else(|| anyhow::anyhow!("No sat associated with this inscription"))?;
 
     let output = if satpoint.outpoint == unbound_outpoint() {
       None
@@ -898,11 +1268,88 @@ impl Server {
       )
     };
 
-    let previous = index.get_inscription_id_by_inscription_number(entry.number - 1)?;
+    let genesis_output = index
+      .get_transaction(inscription_id.txid)?
+      .ok_or_not_found(|| format!("inscription {inscription_id} current transaction"))?
+      .output
+      .into_iter()
+      .next()
+      .ok_or_not_found(|| format!("inscription {inscription_id} genesis transaction output"))?;
+
+    let previous = if let Some(previous) = entry.number.checked_sub(1) {
+      Some(
+        index
+          .get_inscription_id_by_inscription_number(previous)?
+          .ok_or_not_found(|| format!("inscription {previous}"))?,
+      )
+    } else {
+      None
+    };
 
     let next = index.get_inscription_id_by_inscription_number(entry.number + 1)?;
 
-    Ok(
+    Ok(if accept_json.0 {
+      axum::Json(serde_json::json!({
+        "genesis_fee": entry.fee,
+        "genesis_height": entry.height,
+        "genesis_transaction": inscription_id.txid,
+        "genesis_address": page_config.chain.address_from_script(&genesis_output.script_pubkey).unwrap(),
+        "address": output.is_some().then(|| {
+          page_config.chain.address_from_script(&output.unwrap().script_pubkey).unwrap()
+        }),
+        "number": entry.number,
+        "content_length": inscription.content_length(),
+        "content_type": inscription.content_type(),
+        "sat": entry.sat,
+        "sat_name": sat.name(),
+        "decimal": sat.decimal().to_string(),
+        "degree": sat.degree().to_string(),
+        "percentile": sat.percentile(),
+        "cycle": sat.cycle(),
+        "epoch": sat.epoch(),
+        "period": sat.period(),
+        "block": sat.height(),
+        "sat_offset": sat.third(),
+        "rarity": sat.rarity(),
+        "location": satpoint,
+        "output": satpoint.outpoint,
+        "offset": satpoint.offset,
+        "timestamp": timestamp(entry.timestamp).to_string(),
+        "_links": {
+          "self": {
+            "href": format!("/inscription/{}", inscription_id),
+          },
+          "preview": {
+            "href": format!("/preview/{}", inscription_id),
+          },
+          "content": {
+            "href": format!("/content/{}", inscription_id),
+          },
+          "genesis_transaction": {
+            "href": format!("/tx/{}", inscription_id.txid),
+          },
+          "output": {
+            "href": format!("/output/{}", satpoint.outpoint),
+          },
+          "sat": (entry.sat.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/sat/{}", entry.sat.unwrap()),
+            })
+          }),
+          "next": (next.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscription/{}", next.unwrap()),
+            })
+          }),
+          "prev": (previous.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscription/{}", previous.unwrap()),
+            })
+          }),
+        }
+      }))
+      .into_response()
+    } else {
       InscriptionHtml {
         chain: page_config.chain,
         genesis_fee: entry.fee,
@@ -917,39 +1364,231 @@ impl Server {
         satpoint,
         timestamp: timestamp(entry.timestamp),
       }
-      .page(page_config, index.has_sat_index()?),
-    )
+      .page(page_config, index.has_sat_index()?)
+      .into_response()
+    })
   }
 
-  async fn inscriptions(
+  async fn api_inscription(
     Extension(page_config): Extension<Arc<PageConfig>>,
     Extension(index): Extension<Arc<Index>>,
-  ) -> ServerResult<PageHtml<InscriptionsHtml>> {
-    Self::inscriptions_inner(page_config, index, None).await
+    Path(inscription_id): Path<InscriptionId>,
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
+   
+    let entry = index
+      .get_inscription_entry(inscription_id)?
+      .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
+
+    let inscription = index
+      .get_inscription_by_id(inscription_id)?
+      .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
+
+    let satpoint = index
+      .get_inscription_satpoint_by_id(inscription_id)?
+      .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
+
+       let list = if index.has_sat_index()? {
+      index.list(satpoint.outpoint)?
+    } else {
+      None
+    };
+
+
+
+  let sat = entry.sat.ok_or_else(|| anyhow::anyhow!("No sat associated with this inscription"))?;
+
+    let output = if satpoint.outpoint == unbound_outpoint() {
+      None
+    } else {
+      Some(
+        index
+          .get_transaction(satpoint.outpoint.txid)?
+          .ok_or_not_found(|| format!("inscription {inscription_id} current transaction"))?
+          .output
+          .into_iter()
+          .nth(satpoint.outpoint.vout.try_into().unwrap())
+          .ok_or_not_found(|| format!("inscription {inscription_id} current transaction output"))?,
+      )
+    };
+
+    let output2 = if satpoint.outpoint == OutPoint::null() {
+      let mut value = 0;
+
+      if let Some(List::Unspent(ranges)) = &list {
+        for (start, end) in ranges {
+          value += end - start;
+        }
+      }
+
+      TxOut {
+        value,
+        script_pubkey: Script::new(),
+      }
+    } else {
+      index
+        .get_transaction(satpoint.outpoint.txid)?
+        .ok_or_not_found(|| format!("output {}", satpoint.outpoint))?
+
+        .output
+        .into_iter()
+        .nth(satpoint.outpoint.vout as usize)
+        .ok_or_not_found(|| format!("output {}", satpoint.outpoint))?
+
+    };
+
+
+    let genesis_output = index
+      .get_transaction(inscription_id.txid)?
+      .ok_or_not_found(|| format!("inscription {inscription_id} current transaction"))?
+      .output
+      .into_iter()
+      .next()
+      .ok_or_not_found(|| format!("inscription {inscription_id} genesis transaction output"))?;
+
+    let previous = if let Some(previous) = entry.number.checked_sub(1) {
+      Some(
+        index
+          .get_inscription_id_by_inscription_number(previous)?
+          .ok_or_not_found(|| format!("inscription {previous}"))?,
+      )
+    } else {
+      None
+    };
+
+    let next = index.get_inscription_id_by_inscription_number(entry.number + 1)?;
+
+    Ok( axum::Json(serde_json::json!({
+        "genesis_fee": entry.fee,
+        "genesis_height": entry.height,
+        "genesis_transaction": inscription_id.txid,
+        "genesis_address": page_config.chain.address_from_script(&genesis_output.script_pubkey).unwrap(),
+        "address": output.is_some().then(|| {
+          page_config.chain.address_from_script(&output.unwrap().script_pubkey).unwrap()
+        }),
+        "output_value": output2.value,
+        "number": entry.number,
+        "content_length": inscription.content_length(),
+        "content_type": inscription.content_type(),
+        "sat": entry.sat,
+        "sat_name": sat.name(),
+        "decimal": sat.decimal().to_string(),
+        "degree": sat.degree().to_string(),
+        "percentile": sat.percentile(),
+        "cycle": sat.cycle(),
+        "epoch": sat.epoch(),
+        "period": sat.period(),
+        "block": sat.height(),
+        "sat_offset": sat.third(),
+        "rarity": sat.rarity(),
+        "location": satpoint,
+        "output": satpoint.outpoint,
+        "offset": satpoint.offset,
+        "timestamp": timestamp(entry.timestamp).to_string(),
+        "_links": {
+          "self": {
+            "href": format!("/inscription/{}", inscription_id),
+          },
+          "preview": {
+            "href": format!("/preview/{}", inscription_id),
+          },
+          "content": {
+            "href": format!("/content/{}", inscription_id),
+          },
+          "genesis_transaction": {
+            "href": format!("/tx/{}", inscription_id.txid),
+          },
+          "output": {
+            "href": format!("/output/{}", satpoint.outpoint),
+          },
+          "sat": (entry.sat.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/sat/{}", entry.sat.unwrap()),
+            })
+          }),
+          "next": (next.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscription/{}", next.unwrap()),
+            })
+          }),
+          "prev": (previous.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscription/{}", previous.unwrap()),
+            })
+          }),
+        }
+      }))
+      .into_response())
   }
 
-  async fn inscriptions_from(
+ async fn inscriptions(
     Extension(page_config): Extension<Arc<PageConfig>>,
     Extension(index): Extension<Arc<Index>>,
-    Path(from): Path<i64>,
-  ) -> ServerResult<PageHtml<InscriptionsHtml>> {
-    Self::inscriptions_inner(page_config, index, Some(from)).await
+  ) -> ServerResult<Response> {
+    Self::inscriptions_inner(page_config, index, None, false).await
   }
 
-  async fn inscriptions_inner(
+async fn inscriptions_from(
+    Extension(page_config): Extension<Arc<PageConfig>>,
+    Extension(index): Extension<Arc<Index>>,
+    Path(from): Path<u64>,
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
+    Self::inscriptions_inner(page_config, index, Some(from), accept_json.0).await
+  }
+
+  async fn api_inscriptions_from(
+    Extension(page_config): Extension<Arc<PageConfig>>,
+    Extension(index): Extension<Arc<Index>>,
+    Path(from): Path<u64>,
+    accept_json: AcceptJson,
+  ) -> ServerResult<Response> {
+    Self::inscriptions_inner(page_config, index, Some(from), true).await
+  }
+
+
+ async fn inscriptions_inner(
     page_config: Arc<PageConfig>,
     index: Arc<Index>,
-    from: Option<i64>,
-  ) -> ServerResult<PageHtml<InscriptionsHtml>> {
-    let (inscriptions, prev, next) = index.get_latest_inscriptions_with_prev_and_next(100, from)?;
-    Ok(
+    from: Option<u64>,
+    as_json: bool,
+  ) -> ServerResult<Response> {
+    let from_i64 = from.map(|val| val as i64);
+let (inscriptions, prev, next) = index.get_latest_inscriptions_with_prev_and_next(100, from_i64)?;
+
+    Ok(if as_json {
+      axum::Json(serde_json::json!({
+        "inscriptions": inscriptions.iter().map(|inscription| {
+          serde_json::json!({
+            "href": format!("/inscription/{}", inscription),
+          })
+        }).collect::<Vec<_>>(),
+        "_links": {
+          "self": {
+            "href": format!("/inscriptions/{}", from.unwrap_or(0)),
+          },
+          "next": (next.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscriptions/{}", next.unwrap()),
+            })
+          }),
+          "prev": (prev.is_some()).then(|| {
+            serde_json::json!({
+              "href": format!("/inscriptions/{}", prev.unwrap()),
+            })
+          }),
+        }
+      }))
+      .into_response()
+    } else {
       InscriptionsHtml {
         inscriptions,
         next,
         prev,
       }
-      .page(page_config, index.has_sat_index()?),
-    )
+      .page(page_config, index.has_sat_index()?)
+      .into_response()
+    })
   }
 
   async fn redirect_http_to_https(

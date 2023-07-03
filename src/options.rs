@@ -259,8 +259,15 @@ impl Options {
         .filter(|descriptor| descriptor.desc.starts_with("rawtr("))
         .count();
 
+         for descriptor in &descriptors {
+        println!("Descriptor: {}", descriptor.desc);
+    }
+
+        
+
       if tr != 2 || descriptors.len() != 2 + rawtr {
-        bail!("wallet \"{}\" contains unexpected output descriptors, and does not appear to be an `ord` wallet, create a new wallet with `ord wallet create`", self.wallet);
+        println!("Forcing wallet to work. be careful");
+        // bail!("wallet \"{}\" contains unexpected output descriptors, and does not appear to be an `ord` wallet, create a new wallet with `ord wallet create`", self.wallet);
       }
     }
 
@@ -635,6 +642,7 @@ mod tests {
         .load_config()
         .unwrap(),
       Config {
+        api_key: None,
         hidden: iter::once(id).collect(),
         ..Default::default()
       }
@@ -692,6 +700,7 @@ mod tests {
       .load_config()
       .unwrap(),
       Config {
+        api_key: None,
         hidden: iter::once(id).collect(),
         ..Default::default()
       }

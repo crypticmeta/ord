@@ -54,36 +54,40 @@ impl Display for ParseError {
 impl std::error::Error for ParseError {}
 
 impl FromStr for InscriptionId {
-  type Err = ParseError;
+    type Err = ParseError;
 
-  fn from_str(s: &str) -> Result<Self, Self::Err> {
-    if let Some(char) = s.chars().find(|char| !char.is_ascii()) {
-      return Err(ParseError::Character(char));
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(char) = s.chars().find(|char| !char.is_ascii()) {
+            return Err(ParseError::Character(char));
+        }
+
+        const TXID_LEN: usize = 64;
+        const MIN_LEN: usize = TXID_LEN + 2;
+
+        if s.len() < MIN_LEN {
+            return Err(ParseError::Length(s.len()));
+        }
+
+        let txid = &s[..TXID_LEN];
+
+        let separator = s.chars().nth(TXID_LEN).unwrap();
+
+        if separator != 'i' {
+            return Err(ParseError::Separator(separator));
+        }
+
+        let remaining = &s[TXID_LEN + 1..];
+        let vout_end_idx = remaining.find(|c: char| !c.is_numeric()).unwrap_or(remaining.len());
+
+        let vout = &remaining[..vout_end_idx];
+
+        Ok(Self {
+            txid: txid.parse().map_err(ParseError::Txid)?,
+            index: vout.parse().map_err(ParseError::Index)?,
+        })
     }
-
-    const TXID_LEN: usize = 64;
-    const MIN_LEN: usize = TXID_LEN + 2;
-
-    if s.len() < MIN_LEN {
-      return Err(ParseError::Length(s.len()));
-    }
-
-    let txid = &s[..TXID_LEN];
-
-    let separator = s.chars().nth(TXID_LEN).unwrap();
-
-    if separator != 'i' {
-      return Err(ParseError::Separator(separator));
-    }
-
-    let vout = &s[TXID_LEN + 1..];
-
-    Ok(Self {
-      txid: txid.parse().map_err(ParseError::Txid)?,
-      index: vout.parse().map_err(ParseError::Index)?,
-    })
-  }
 }
+
 
 impl From<Txid> for InscriptionId {
   fn from(txid: Txid) -> Self {
