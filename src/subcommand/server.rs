@@ -397,7 +397,7 @@ impl Server {
         "block": sat.height(),
         "offset": sat.third(),
         "rarity": sat.rarity(),
-        "timestamp": index.blocktime(sat.height())?.timestamp().to_string(),
+        "timestamp": index.block_time(sat.height())?.timestamp().to_string(),
         "_links": {
           "self": {
             "href": format!("/sat/{}", sat),
@@ -455,7 +455,7 @@ impl Server {
         "block": sat.height(),
         "offset": sat.third(),
         "rarity": sat.rarity(),
-        "timestamp": index.blocktime(sat.height())?.timestamp().to_string(),
+        "timestamp": index.block_time(sat.height())?.timestamp().to_string(),
         "_links": {
           "self": {
             "href": format!("/sat/{}", sat),
