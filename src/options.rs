@@ -254,9 +254,9 @@ impl Options {
         .filter(|descriptor| descriptor.desc.starts_with("rawtr("))
         .count();
 
-         for descriptor in &descriptors {
-        println!("Descriptor: {}", descriptor.desc);
-    }
+    //      for descriptor in &descriptors {
+    //     println!("Descriptor: {}", descriptor.desc);
+    // }
 
         
 
