@@ -146,6 +146,16 @@ impl Server {
 
       let router = Router::new()
         .route("/", get(Self::home))
+         .route("/api/sat/:sat", get(Self::api_sat))
+          .route("/api/feed", get(Self::api_feed))
+          .route("/api/inscription/:inscription_id", get(Self::api_inscription))
+        .route("/api/inscriptions", get(Self::inscriptions))
+        .route("/api/inscriptions/:from", get(Self::api_inscriptions_from))
+        .route("/api/tx/:txid", get(Self::api_transaction))
+        .route("/api/output/:output", get(Self::api_output))        
+          .route("/address/:address", get(Self::address))
+          
+        .route("/block-count", get(Self::block_count))
         .route("/block/:query", get(Self::block))
         .route("/blockcount", get(Self::block_count))
         .route("/blockheight", get(Self::block_height))
