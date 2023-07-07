@@ -77,39 +77,52 @@ fn get_change_address(client: &Client) -> Result<Address> {
     .context("could not get change addresses from wallet")
 }
 
-pub(crate) fn initialize_wallet(options: &Options, seed: [u8; 64]) -> Result {
-  let client = options.bitcoin_rpc_client_for_wallet_command(true)?;
-  let network = options.chain().network();
+pub(crate) fn initialize_wallet(options: &Options, seed: [u8; 64]) -> Result<Address> {
+    let client = options.bitcoin_rpc_client_for_wallet_command(true)?;
+    let network = options.chain().network();
 
-  client.create_wallet(&options.wallet, None, Some(true), None, None)?;
+    println!("Creating wallet: {}", &options.wallet);
+    client.create_wallet(&options.wallet, None, Some(true), None, None)?;
+    println!("Wallet created");
 
-  let secp = Secp256k1::new();
+    let secp = Secp256k1::new();
 
-  let master_private_key = ExtendedPrivKey::new_master(network, &seed)?;
+    let master_private_key = ExtendedPrivKey::new_master(network, &seed)?;
 
-  let fingerprint = master_private_key.fingerprint(&secp);
+    let fingerprint = master_private_key.fingerprint(&secp);
 
-  let derivation_path = DerivationPath::master()
-    .child(ChildNumber::Hardened { index: 86 })
-    .child(ChildNumber::Hardened {
-      index: u32::from(network != Network::Bitcoin),
-    })
-    .child(ChildNumber::Hardened { index: 0 });
+    let derivation_path = DerivationPath::master()
+        .child(ChildNumber::Hardened { index: 86 })
+        .child(ChildNumber::Hardened {
+            index: u32::from(network != Network::Bitcoin),
+        })
+        .child(ChildNumber::Hardened { index: 0 });
 
-  let derived_private_key = master_private_key.derive_priv(&secp, &derivation_path)?;
+    let derived_private_key = master_private_key.derive_priv(&secp, &derivation_path)?;
 
-  for change in [false, true] {
-    derive_and_import_descriptor(
-      &client,
-      &secp,
-      (fingerprint, derivation_path.clone()),
-      derived_private_key,
-      change,
-    )?;
-  }
+    for change in [false, true] {
+        derive_and_import_descriptor(
+            &client,
+            &secp,
+            (fingerprint, derivation_path.clone()),
+            derived_private_key,
+            change,
+        )?;
+    }
 
-  Ok(())
+    println!("Wallet initialization completed successfully");
+
+    let address = options
+        .bitcoin_rpc_client_for_wallet_command(false)?
+        .get_new_address(None, Some(bitcoincore_rpc::json::AddressType::Bech32m))?;
+
+    println!("Address generated: {}", &address);
+
+    Ok(address)
 }
+
+
+
 
 fn derive_and_import_descriptor(
   client: &Client,
