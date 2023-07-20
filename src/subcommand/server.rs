@@ -152,7 +152,8 @@ impl Server {
         .route("/api/inscriptions", get(Self::inscriptions))
         .route("/api/inscriptions/:from", get(Self::api_inscriptions_from))
         .route("/api/tx/:txid", get(Self::api_transaction))
-        .route("/api/output/:output", get(Self::api_output))        
+        .route("/api/output/:output", get(Self::api_output))     
+        .route("/api/address/:address", get(Self::address))   
           .route("/address/:address", get(Self::address))
           
         .route("/block-count", get(Self::block_count))
