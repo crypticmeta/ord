@@ -19,6 +19,7 @@ const INSCRIPTION_ENVELOPE_HEADER: [bitcoin::blockdata::script::Instruction<'sta
 const PROTOCOL_ID: &[u8] = b"ord";
 const BODY_TAG: &[u8] = &[];
 const CONTENT_TYPE_TAG: &[u8] = &[1];
+const CURSED_TAG: &[u8] = &[66];
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Inscription {
@@ -80,7 +81,7 @@ impl Inscription {
     })
   }
 
-  fn append_reveal_script_to_builder(&self, mut builder: script::Builder) -> script::Builder {
+  fn append_reveal_script_to_builder(&self, mut builder: script::Builder, cursed: bool) -> script::Builder {
     builder = builder
       .push_opcode(opcodes::OP_FALSE)
       .push_opcode(opcodes::all::OP_IF)
@@ -90,6 +91,12 @@ impl Inscription {
       builder = builder
         .push_slice(CONTENT_TYPE_TAG)
         .push_slice(content_type);
+    }
+    if cursed {
+      log::info!("Appending cursed tag");
+      builder = builder
+        .push_slice(CURSED_TAG)
+        .push_slice("cursed".as_bytes());
     }
 
     if let Some(body) = &self.body {
@@ -102,8 +109,8 @@ impl Inscription {
     builder.push_opcode(opcodes::all::OP_ENDIF)
   }
 
-  pub(crate) fn append_reveal_script(&self, builder: script::Builder) -> Script {
-    self.append_reveal_script_to_builder(builder).into_script()
+  pub(crate) fn append_reveal_script(&self, builder: script::Builder, cursed: bool) -> Script {
+    self.append_reveal_script_to_builder(builder, cursed).into_script()
   }
 
   pub(crate) fn media(&self) -> Media {

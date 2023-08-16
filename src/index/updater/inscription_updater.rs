@@ -144,20 +144,55 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
           break;
         }
 
-        let initial_inscription_is_cursed = inscribed_offsets
-          .get(&offset)
-          .and_then(
-            |inscription_id| match self.id_to_entry.get(&inscription_id.store()) {
-              Ok(option) => option.map(|entry| InscriptionEntry::load(entry.value()).number < 0),
-              Err(_) => None,
-            },
-          )
-          .unwrap_or(false);
+       let initial_inscription_is_cursed = inscribed_offsets
+    .get(&offset)
+    .and_then(
+        |inscription_id| match self.id_to_entry.get(&inscription_id.store()) {
+            Ok(option) => option.map(|entry| InscriptionEntry::load(entry.value()).number < 0),
+            Err(_) => None,
+        },
+    )
+    .unwrap_or(false);
 
-        let cursed = !initial_inscription_is_cursed
-          && (inscription.tx_in_index != 0
-            || inscription.tx_in_offset != 0
-            || inscribed_offsets.contains_key(&offset));
+let cursed = !initial_inscription_is_cursed
+    && (inscription.tx_in_index != 0
+      || inscription.tx_in_offset != 0
+      || inscribed_offsets.contains_key(&offset));
+
+      let inscription_id = InscriptionId {
+          txid,
+          index: id_counter,
+        };
+
+if cursed {
+    println!("Inscription is cursed");
+
+    if !initial_inscription_is_cursed {
+        println!("Inscription is cursed due to initial inscription not being cursed");
+    }
+
+    if inscription.tx_in_index != 0 {
+        println!(
+            "Inscription (ID: {}) is cursed due to tx_in_index being non-zero. Value: {}",
+            inscription_id, inscription.tx_in_index
+        );
+    }
+
+    if inscription.tx_in_offset != 0 {
+        println!(
+            "Inscription (ID: {}) is cursed due to tx_in_offset being non-zero. Value: {}",
+            inscription_id, inscription.tx_in_offset
+        );
+    }
+
+    if inscribed_offsets.contains_key(&offset) {
+        println!(
+            "Inscription (ID: {}) is cursed due to inscribed_offsets containing the key. Key: {}",
+            inscription_id, offset
+        );
+    }
+}
+
 
         // In this first part of the cursed inscriptions implementation we ignore reinscriptions.
         // This will change once we implement reinscriptions.
@@ -165,10 +200,7 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
           || inscription.tx_in_offset != 0
           || input_value == 0;
 
-        let inscription_id = InscriptionId {
-          txid,
-          index: id_counter,
-        };
+        
 
         floating_inscriptions.push(Flotsam {
           inscription_id,

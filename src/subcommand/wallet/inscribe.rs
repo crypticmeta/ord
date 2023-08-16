@@ -28,29 +28,32 @@ struct Output {
 
 #[derive(Debug, Parser)]
 pub(crate) struct Inscribe {
-  #[clap(long, help = "Inscribe <SATPOINT>")]
-  pub(crate) satpoint: Option<SatPoint>,
-  #[clap(long, help = "Use fee rate of <FEE_RATE> sats/vB")]
-  pub(crate) fee_rate: FeeRate,
-  #[clap(
-    long,
-    help = "Use <COMMIT_FEE_RATE> sats/vbyte for commit transaction.\nDefaults to <FEE_RATE> if unset."
-  )]
-  pub(crate) commit_fee_rate: Option<FeeRate>,
-  #[clap(help = "Inscribe sat with contents of <FILE>")]
-  pub(crate) file: PathBuf,
-  #[clap(long, help = "Do not back up recovery key.")]
-  pub(crate) no_backup: bool,
-  #[clap(
-    long,
-    help = "Do not check that transactions are equal to or below the MAX_STANDARD_TX_WEIGHT of 400,000 weight units. Transactions over this limit are currently nonstandard and will not be relayed by bitcoind in its default configuration. Do not use this flag unless you understand the implications."
-  )]
-  pub(crate) no_limit: bool,
-  #[clap(long, help = "Don't sign or broadcast transactions.")]
-  pub(crate) dry_run: bool,
-  #[clap(long, help = "Send inscription to <DESTINATION>.")]
-  pub(crate) destination: Option<Address>,
+    #[clap(long, help = "Inscribe <SATPOINT>")]
+    pub(crate) satpoint: Option<SatPoint>,
+    #[clap(long, help = "Use fee rate of <FEE_RATE> sats/vB")]
+    pub(crate) fee_rate: FeeRate,
+    #[clap(
+      long,
+      help = "Use <COMMIT_FEE_RATE> sats/vbyte for commit transaction.\nDefaults to <FEE_RATE> if unset."
+    )]
+    pub(crate) commit_fee_rate: Option<FeeRate>,
+    #[clap(help = "Inscribe sat with contents of <FILE>")]
+    pub(crate) file: PathBuf,
+    #[clap(long, help = "Do not back up recovery key.")]
+    pub(crate) no_backup: bool,
+    #[clap(
+      long,
+      help = "Do not check that transactions are equal to or below the MAX_STANDARD_TX_WEIGHT of 400,000 weight units. Transactions over this limit are currently nonstandard and will not be relayed by bitcoind in its default configuration. Do not use this flag unless you understand the implications."
+    )]
+    pub(crate) no_limit: bool,
+    #[clap(long, help = "Don't sign or broadcast transactions.")]
+    pub(crate) dry_run: bool,
+    #[clap(long, help = "Send inscription to <DESTINATION>.")]
+    pub(crate) destination: Option<Address>,
+    #[clap(long, help = "Create Cursed Inscription")]
+    pub(crate) cursed: bool, 
 }
+
 
 impl Inscribe {
   pub(crate) fn run(self, options: Options) -> Result {
@@ -72,8 +75,8 @@ impl Inscribe {
       .map(Ok)
       .unwrap_or_else(|| get_change_address(&client))?;
 
-    let (unsigned_commit_tx, reveal_tx, recovery_key_pair) =
-      Inscribe::create_inscription_transactions(
+   let (unsigned_commit_tx, reveal_tx, recovery_key_pair) = if self.cursed {
+     Inscribe::create_cursed_inscription_transactions(
         self.satpoint,
         inscription,
         inscriptions,
@@ -84,7 +87,22 @@ impl Inscribe {
         self.commit_fee_rate.unwrap_or(self.fee_rate),
         self.fee_rate,
         self.no_limit,
-      )?;
+    )?
+} else {
+    Inscribe::create_inscription_transactions(
+        self.satpoint,
+        inscription,
+        inscriptions,
+        options.chain().network(),
+        utxos.clone(),
+        commit_tx_change,
+        reveal_tx_destination,
+        self.commit_fee_rate.unwrap_or(self.fee_rate),
+        self.fee_rate,
+        self.no_limit,
+    )?
+};
+
 
     utxos.insert(
       reveal_tx.input[0].previous_output,
@@ -191,6 +209,7 @@ impl Inscribe {
       script::Builder::new()
         .push_slice(&public_key.serialize())
         .push_opcode(opcodes::all::OP_CHECKSIG),
+        false,
     );
 
     let taproot_spend_info = TaprootBuilder::new()
@@ -301,6 +320,193 @@ impl Inscribe {
 
     Ok((unsigned_commit_tx, reveal_tx, recovery_key_pair))
   }
+
+ fn create_cursed_inscription_transactions(
+    // Inputs: Various elements needed to create transactions and perform checks.
+    satpoint: Option<SatPoint>,  // The SatPoint object for which the inscription will be created.
+    inscription: Inscription,  // The Inscription object containing the inscription to be added.
+    inscriptions: BTreeMap<SatPoint, InscriptionId>,  // A BTreeMap linking SatPoints with their InscriptionIds.
+    network: Network,  // The Bitcoin network (mainnet, testnet, etc.).
+    utxos: BTreeMap<OutPoint, Amount>,  // A BTreeMap linking OutPoints with their Amounts (unspent transactions).
+    change: [Address; 2],  // An array of two addresses to receive change.
+    destination: Address,  // The destination address for the transactions.
+    commit_fee_rate: FeeRate,  // The fee rate for the commit transaction.
+    reveal_fee_rate: FeeRate,  // The fee rate for the reveal transaction.
+    no_limit: bool,  // A flag indicating whether there's a limit to the transaction weight.
+) -> Result<(Transaction, Transaction, TweakedKeyPair)> {
+    // Check if a SatPoint is provided or find a SatPoint from the available UTXOs that hasn't been inscribed yet.
+    let satpoint = if let Some(satpoint) = satpoint {
+      satpoint
+    } else {
+      let inscribed_utxos = inscriptions
+        .keys()
+        .map(|satpoint| satpoint.outpoint)
+        .collect::<BTreeSet<OutPoint>>();
+
+      utxos
+        .keys()
+        .find(|outpoint| !inscribed_utxos.contains(outpoint))
+        .map(|outpoint| SatPoint {
+          outpoint: *outpoint,
+          offset: 0,
+        })
+        .ok_or_else(|| anyhow!("wallet contains no cardinal utxos"))?
+    };
+
+    // Make sure the selected SatPoint isn't already inscribed.
+    for (inscribed_satpoint, _inscription_id) in &inscriptions {
+      if inscribed_satpoint == &satpoint {
+        return Err(anyhow!("sat at {} already inscribed", satpoint));
+      }
+
+      if inscribed_satpoint.outpoint == satpoint.outpoint {
+        return Err(anyhow!(
+          "utxo {} already inscribed with inscription {_inscription_id} on sat {inscribed_satpoint}",
+          satpoint.outpoint,
+        ));
+      }
+    }
+
+
+    // Create a new Secp256k1 context and key pair.
+    let secp256k1 = Secp256k1::new();
+    let key_pair = UntweakedKeyPair::new(&secp256k1, &mut rand::thread_rng());
+    let (public_key, _parity) = XOnlyPublicKey::from_keypair(&key_pair);
+
+    // Append the reveal script to the inscription.
+    let reveal_script = inscription.append_reveal_script(
+      script::Builder::new()
+        .push_slice(&public_key.serialize())
+        .push_opcode(opcodes::all::OP_CHECKSIG), 
+        true,
+    );
+
+    // Build a Taproot from the reveal script and finalize it.
+    let taproot_spend_info = TaprootBuilder::new()
+      .add_leaf(0, reveal_script.clone())
+      .expect("adding leaf should work")
+      .finalize(&secp256k1, public_key)
+      .expect("finalizing taproot builder should work");
+
+    // Get the control block for the Taproot.
+    let control_block = taproot_spend_info
+      .control_block(&(reveal_script.clone(), LeafVersion::TapScript))
+      .expect("should compute control block");
+
+    // Create the address for the commit transaction from the Taproot.
+    let commit_tx_address = Address::p2tr_tweaked(taproot_spend_info.output_key(), network);
+
+    // Call a function (not included here) to build the reveal transaction and get its fee.
+    let (_, reveal_fee) = Self::build_reveal_transaction(
+      &control_block,
+      reveal_fee_rate,
+      OutPoint::null(),
+      TxOut {
+        script_pubkey: destination.script_pubkey(),
+        value: 0,
+      },
+      &reveal_script,
+    );
+
+    // Call a function (not included here) to build the commit transaction.
+    let unsigned_commit_tx = TransactionBuilder::build_transaction_with_value(
+      satpoint,
+      inscriptions,
+      utxos,
+      commit_tx_address.clone(),
+      change,
+      commit_fee_rate,
+      reveal_fee + TransactionBuilder::TARGET_POSTAGE,
+    )?;
+
+    // Search for the commit/inscription output within the transaction.
+    let (vout, output) = unsigned_commit_tx
+      .output
+      .iter()
+      .enumerate()
+      .find(|(_vout, output)| output.script_pubkey == commit_tx_address.script_pubkey())
+      .expect("should find sat commit/inscription output");
+
+    // Build the reveal transaction, referring to the commit transaction output.
+    let (mut reveal_tx, fee) = Self::build_reveal_transaction(
+      &control_block,
+      reveal_fee_rate,
+      OutPoint {
+        txid: unsigned_commit_tx.txid(),
+        vout: vout.try_into().unwrap(),
+      },
+      TxOut {
+        script_pubkey: destination.script_pubkey(),
+        value: output.value,
+      },
+      &reveal_script,
+    );
+
+    // Adjust the reveal transaction's output value to account for the fee.
+    reveal_tx.output[0].value = reveal_tx.output[0]
+      .value
+      .checked_sub(fee.to_sat())
+      .context("commit transaction output value insufficient to pay transaction fee")?;
+
+    // Ensure the transaction output won't be "dust" (i.e., too small to be worth spending).
+    if reveal_tx.output[0].value < reveal_tx.output[0].script_pubkey.dust_value().to_sat() {
+      bail!("commit transaction output would be dust");
+    }
+
+    // Prepare for signing the reveal transaction.
+    let mut sighash_cache = SighashCache::new(&mut reveal_tx);
+
+    // Compute the signature hash for the reveal transaction.
+    let signature_hash = sighash_cache
+      .taproot_script_spend_signature_hash(
+        0,
+        &Prevouts::All(&[output]),
+        TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
+        SchnorrSighashType::Default,
+      )
+      .expect("signature hash should compute");
+
+    // Sign the reveal transaction.
+    let signature = secp256k1.sign_schnorr(
+      &secp256k1::Message::from_slice(signature_hash.as_inner())
+        .expect("should be cryptographically secure hash"),
+      &key_pair,
+    );
+
+    // Add the signature, reveal script, and control block to the reveal transaction's witness field.
+    let witness = sighash_cache
+      .witness_mut(0)
+      .expect("getting mutable witness reference should work");
+    witness.push(signature.as_ref());
+    witness.push(reveal_script);
+    witness.push(&control_block.serialize());
+
+    // Generate a tweaked key pair for recovery purposes.
+    let recovery_key_pair = key_pair.tap_tweak(&secp256k1, taproot_spend_info.merkle_root());
+
+    // Verify the commit transaction address against the tweaked public key.
+    let (x_only_pub_key, _parity) = recovery_key_pair.to_inner().x_only_public_key();
+    assert_eq!(
+      Address::p2tr_tweaked(
+        TweakedPublicKey::dangerous_assume_tweaked(x_only_pub_key),
+        network,
+      ),
+      commit_tx_address
+    );
+
+    // Check the reveal transaction's weight against the maximum standard transaction weight.
+    let reveal_weight = reveal_tx.weight();
+
+    if !no_limit && reveal_weight > MAX_STANDARD_TX_WEIGHT.try_into().unwrap() {
+      bail!(
+        "reveal transaction weight greater than {MAX_STANDARD_TX_WEIGHT} (MAX_STANDARD_TX_WEIGHT): {reveal_weight}"
+      );
+    }
+
+    // Return the unsigned commit transaction, the reveal transaction, and the recovery key pair.
+    Ok((unsigned_commit_tx, reveal_tx, recovery_key_pair))
+}
+
 
   fn backup_recovery_key(
     client: &Client,
